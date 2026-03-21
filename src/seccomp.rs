@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, anyhow};
-use libseccomp::{ScmpAction, ScmpFilterContext, ScmpNotifReq};
+use libseccomp::{ScmpAction, ScmpArch, ScmpFilterContext, ScmpNotifReq, ScmpSyscall};
 use log::warn;
 use nix::errno::Errno;
 use nix::ioctl_write_ptr;
@@ -87,10 +87,30 @@ pub fn read_process_path(pid: u32, addr: u64) -> Result<PathBuf, PeekError> {
     Ok(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
 }
 
+#[allow(dead_code)]
 pub fn setup_seccomp_hook(syscalls: &[i32]) -> Result<RawFd> {
     let mut filter = ScmpFilterContext::new(ScmpAction::Allow).context("Failed to init seccomp")?;
     for &nr in syscalls {
         filter.add_rule(ScmpAction::Notify, nr).with_context(|| format!("Failed to add notify rule for syscall {nr}"))?;
+    }
+    filter.load().context("Failed to load seccomp filter")?;
+    Ok(filter.get_notify_fd()?)
+}
+
+pub fn setup_seccomp_hook_ex(syscall_names: &[&str], extra_archs: &[ScmpArch]) -> Result<RawFd> {
+    let mut filter = ScmpFilterContext::new(ScmpAction::Allow).context("Failed to init seccomp")?;
+    for &arch in extra_archs {
+        filter.add_arch(arch).with_context(|| format!("Failed to add arch {arch:?}"))?;
+    }
+    for &name in syscall_names {
+        if let Ok(sc) = ScmpSyscall::from_name(name) {
+            filter.add_rule(ScmpAction::Notify, sc).with_context(|| format!("Failed to add notify rule for {name}"))?;
+        }
+        for &arch in extra_archs {
+            if let Ok(sc) = ScmpSyscall::from_name_by_arch(name, arch) {
+                let _ = filter.add_rule(ScmpAction::Notify, sc);
+            }
+        }
     }
     filter.load().context("Failed to load seccomp filter")?;
     Ok(filter.get_notify_fd()?)

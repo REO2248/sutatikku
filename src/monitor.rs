@@ -1,5 +1,5 @@
 use anyhow::Result;
-use libseccomp::{ScmpNotifReq, ScmpNotifResp, ScmpNotifRespFlags};
+use libseccomp::{ScmpNotifReq, ScmpNotifResp, ScmpNotifRespFlags, ScmpSyscall};
 use log::{debug, warn};
 use nix::errno::Errno;
 use std::os::fd::{AsRawFd, RawFd};
@@ -37,10 +37,11 @@ impl RecordingMonitor {
             return;
         }
 
-        let nr = req.data.syscall.as_raw_syscall() as i64;
-        let path_arg_idx = if nr == libc::SYS_open {
+        let is = |name: &str| ScmpSyscall::from_name_by_arch(name, req.data.arch)
+            .map(|s| s == req.data.syscall).unwrap_or(false);
+        let path_arg_idx = if is("open") {
             Some(0)
-        } else if nr == libc::SYS_openat {
+        } else if is("openat") {
             Some(1)
         } else {
             None
@@ -94,18 +95,19 @@ impl RedirectionMonitor {
     }
 
     fn dispatch_syscall(&self, req: &ScmpNotifReq, notif_fd: RawFd) -> Result<bool> {
-        let nr = req.data.syscall.as_raw_syscall() as i64;
-        if nr == libc::SYS_open {
+        let is = |name: &str| ScmpSyscall::from_name_by_arch(name, req.data.arch)
+            .map(|s| s == req.data.syscall).unwrap_or(false);
+        if is("open") {
             self.handle_open(req, notif_fd, 0, 1, 2)
-        } else if nr == libc::SYS_openat {
+        } else if is("openat") {
             self.handle_openat(req, notif_fd, 0, 1, 2, 3)
-        } else if nr == libc::SYS_newfstatat {
+        } else if is("newfstatat") || is("fstatat64") {
             self.handle_statat(req, notif_fd, 0, 1, 2, 3)
-        } else if nr == libc::SYS_access {
+        } else if is("access") {
             self.handle_access(req, notif_fd, 0, 1)
-        } else if nr == libc::SYS_faccessat || nr == libc::SYS_faccessat2 {
+        } else if is("faccessat") || is("faccessat2") {
             self.handle_accessat(req, notif_fd, 0, 1, 2, 3)
-        } else if nr == libc::SYS_getdents || nr == libc::SYS_getdents64 {
+        } else if is("getdents") || is("getdents64") {
             self.handle_getdents(req, notif_fd)
         } else {
             Ok(false)

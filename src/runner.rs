@@ -15,7 +15,9 @@ use std::os::fd::{AsFd, AsRawFd};
 use std::collections::HashMap;
 
 use crate::builder::BundleConfig;
-use crate::seccomp::{setup_seccomp_hook, run_seccomp_monitor};
+use libseccomp::ScmpArch;
+
+use crate::seccomp::{setup_seccomp_hook_ex, run_seccomp_monitor};
 use crate::monitor::RedirectionMonitor;
 
 pub struct Runner {
@@ -100,18 +102,10 @@ impl Runner {
             ForkResult::Child => {
                 drop(parent_sock);
                 
-                let syscalls_to_hook = vec![
-                    libc::SYS_open as i32,
-                    libc::SYS_openat as i32,
-                    libc::SYS_newfstatat as i32,
-                    libc::SYS_access as i32,
-                    libc::SYS_faccessat as i32,
-                    libc::SYS_faccessat2 as i32,
-                    libc::SYS_getdents as i32,
-                    libc::SYS_getdents64 as i32,
-                ];
-
-                let notif_fd = setup_seccomp_hook(&syscalls_to_hook)?;
+                let notif_fd = setup_seccomp_hook_ex(
+                    &["open", "openat", "newfstatat", "fstatat64", "access", "faccessat", "faccessat2", "getdents", "getdents64"],
+                    &[ScmpArch::X86],
+                )?;
                 child_sock.send_fd(notif_fd)?;
                 child_sock.pong()?;
 

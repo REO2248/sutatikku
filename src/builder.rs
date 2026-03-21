@@ -100,7 +100,9 @@ pub const DEFAULT_IGNORE_PATHS: &[&str] = &[
 ];
 
 use crate::monitor::RecordingMonitor;
-use crate::seccomp::{setup_seccomp_hook, run_seccomp_monitor};
+use libseccomp::ScmpArch;
+
+use crate::seccomp::{setup_seccomp_hook_ex, run_seccomp_monitor};
 use nix::unistd::{fork, ForkResult};
 use nix::sys::wait::waitpid;
 use std::os::fd::{AsFd, AsRawFd};
@@ -122,8 +124,7 @@ impl Builder {
         match unsafe { fork()? } {
             ForkResult::Child => {
                 drop(parent_sock);
-                let syscalls = vec![libc::SYS_open as i32, libc::SYS_openat as i32];
-                let notif_fd = setup_seccomp_hook(&syscalls)?;
+                let notif_fd = setup_seccomp_hook_ex(&["open", "openat"], &[ScmpArch::X86])?;
                 child_sock.send_fd(notif_fd)?;
                 child_sock.pong()?;
 
@@ -423,11 +424,18 @@ impl Builder {
 
                 let mut path = None;
                 if let Some(arrow_idx) = line.find("=>") {
-                    let path_part = &line[arrow_idx + 2..].trim();
-                    let end_idx = path_part.find('(').unwrap_or(path_part.len());
-                    let path_str = path_part[..end_idx].trim();
-                    if !path_str.is_empty() && path_str != "not found" {
-                        path = Some(PathBuf::from(path_str));
+                    let lhs_str = line[..arrow_idx].trim();
+                    let lhs_is_interp = lhs_str.starts_with('/')
+                        && (lhs_str.contains("/ld-linux") || lhs_str.contains("/ld-musl"));
+                    if lhs_is_interp {
+                        path = Some(PathBuf::from(lhs_str));
+                    } else {
+                        let path_part = line[arrow_idx + 2..].trim();
+                        let end_idx = path_part.find('(').unwrap_or(path_part.len());
+                        let path_str = path_part[..end_idx].trim();
+                        if !path_str.is_empty() && path_str != "not found" {
+                            path = Some(PathBuf::from(path_str));
+                        }
                     }
                 } else if line.starts_with('/') {
                     let end_idx = line.find('(').unwrap_or(line.len());
